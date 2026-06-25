@@ -68,7 +68,11 @@ class Matcher:
             return self._semantic_hook(query, tools)
 
         if not results:
-            raise NoMatchError(f"No tools matched query: {query!r}")
+            raise NoMatchError(
+                query=query,
+                threshold=self._threshold,
+                tool_count=len(tools),
+            )
 
         # Sort by confidence descending
         return sorted(results.values(), key=lambda r: r.confidence, reverse=True)

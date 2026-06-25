@@ -25,9 +25,7 @@ class MCPConnection:
         try:
             self._session = aiohttp.ClientSession()
         except Exception as e:
-            raise ServerOfflineError(
-                f"Cannot connect to server {self.server_name} at {self.base_url}: {e}"
-            )
+            raise ServerOfflineError(self.server_name)
 
     async def close(self) -> None:
         """Close _session if open. Set to None."""
@@ -53,9 +51,7 @@ class MCPConnection:
                 data = await resp.json()
                 return data["result"]["tools"]
         except Exception as e:
-            raise ServerOfflineError(
-                f"Failed to list tools from {self.server_name}: {e}"
-            )
+            raise ServerOfflineError(self.server_name) from e
 
     async def call_tool(self, tool_name: str, params: dict) -> Any:
         """
@@ -77,15 +73,14 @@ class MCPConnection:
                 if "result" not in data:
                     raise PartialResultError(
                         partial_result=data,
-                        message=f"No 'result' key in response from {self.server_name}::{tool_name}",
+                        message="No 'result' key in response",
+                        tool_key=f"{self.server_name}::{tool_name}",
                     )
                 return data["result"]["content"]
         except PartialResultError:
             raise
         except Exception as e:
-            raise ServerOfflineError(
-                f"Failed to call tool {tool_name} on {self.server_name}: {e}"
-            )
+            raise ServerOfflineError(self.server_name) from e
 
     def make_loader(self, tool_name: str) -> Callable:
         """

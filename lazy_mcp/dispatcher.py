@@ -46,7 +46,9 @@ class Dispatcher:
         server_name = tool_key.split("::")[0]
         health = self._registry.get_health(server_name)
         if health is not None and health.status == HealthStatus.DEAD:
-            raise ServerOfflineError(f"Server is offline: {server_name}")
+            raise ServerOfflineError(
+                server_name, fail_count=health.fail_count
+            )
 
         # 3. LRU cache check
         cached = self._lru.get(tool_key)
@@ -111,5 +113,6 @@ class Dispatcher:
         except asyncio.TimeoutError:
             raise PartialResultError(
                 partial_result=None,
-                message=f"{tool_entry.tool_key} timed out after {STREAM_TIMEOUT_SECONDS}s",
+                message=f"Timed out after {STREAM_TIMEOUT_SECONDS}s",
+                tool_key=tool_entry.tool_key,
             )

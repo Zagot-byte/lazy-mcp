@@ -53,7 +53,9 @@ class ToolRegistry:
     def get(self, tool_key: str) -> ToolEntry:
         """Raises ToolNotFoundError if not found."""
         if tool_key not in self._index:
-            raise ToolNotFoundError(f"Tool not found: {tool_key}")
+            raise ToolNotFoundError(
+                tool_key, available_keys=list(self._index.keys())
+            )
         return self._index[tool_key]
 
     def all_tools(self) -> list[ToolEntry]:
