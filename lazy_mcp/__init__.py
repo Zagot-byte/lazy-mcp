@@ -9,6 +9,7 @@ from lazy_mcp.errors import (
     NoMatchError,
 )
 from lazy_mcp.models import DispatchResult, MatchResult, MatchType, HealthStatus
+from lazy_mcp.server import LazyMCPServer, serve
 
 __version__ = "0.1.0"
 
@@ -23,4 +24,6 @@ __all__ = [
     "MatchResult",
     "MatchType",
     "HealthStatus",
+    "LazyMCPServer",
+    "serve",
 ]

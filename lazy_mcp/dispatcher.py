@@ -1,81 +1,53 @@
-"""Async tool dispatcher for lazy_mcp."""
-
 import asyncio
 import inspect
 from typing import Any
 
-from lazy_mcp.models import (
-    DEFAULT_LRU_CAPACITY,
-    STREAM_TIMEOUT_SECONDS,
-    DispatchResult,
-    HealthStatus,
-)
+from lazy_mcp.models import DispatchResult, HealthStatus
 from lazy_mcp.lru import LRUCache
 from lazy_mcp.registry import ToolRegistry
 from lazy_mcp.errors import (
-    DispatchError,
-    PartialResultError,
-    ServerOfflineError,
-    ToolNotFoundError,
+    ServerOfflineError, PartialResultError, DispatchError, ToolNotFoundError
 )
+from lazy_mcp.models import DEFAULT_LRU_CAPACITY, STREAM_TIMEOUT_SECONDS
 
 
 class Dispatcher:
-    """Dispatches tool calls with LRU caching and health tracking."""
 
-    def __init__(
-        self,
-        registry: ToolRegistry,
-        lru_capacity: int = DEFAULT_LRU_CAPACITY,
-    ) -> None:
-        self._lru: LRUCache = LRUCache(capacity=lru_capacity)
-        self._registry: ToolRegistry = registry
+    def __init__(self, registry: ToolRegistry,
+                 lru_capacity: int = DEFAULT_LRU_CAPACITY):
+        self._registry = registry
+        self._lru: LRUCache = LRUCache(lru_capacity)
 
     async def dispatch(self, tool_key: str, params: dict) -> DispatchResult:
-        """
-        Main dispatch flow:
-        1. Lookup tool in registry (raises ToolNotFoundError if missing).
-        2. Check server health — raise ServerOfflineError if DEAD.
-        3. Load schema from LRU cache or cold-load.
-        4. Invoke tool and handle errors.
-        """
-        # 1. Lookup
-        tool_entry = self._registry.get(tool_key)
+        # 1. existence check
+        tool_entry = self._registry.get(tool_key)  # raises ToolNotFoundError if missing
 
-        # 2. Health check
+        # 2. health gate — fail fast before any I/O
         server_name = tool_key.split("::")[0]
         health = self._registry.get_health(server_name)
-        if health is not None and health.status == HealthStatus.DEAD:
-            raise ServerOfflineError(
-                server_name, fail_count=health.fail_count
-            )
+        if health and health.status == HealthStatus.DEAD:
+            raise ServerOfflineError(server_name)
 
-        # 3. LRU cache check
-        cached = self._lru.get(tool_key)
-        if cached is None:
-            await self._load_schema(tool_entry)
+        # 3. LRU: warm/cold tracking only — does NOT cache results
+        warm = self._lru.get(tool_key)
+        if not warm:
+            self._ensure_warm(tool_key)   # marks LRU, no I/O
 
-        # 4. Invoke
+        # 4. invoke — single call to loader with real params
         try:
             result = await self._invoke(tool_entry, params)
             self._registry.update_health(server_name, HealthStatus.WARM)
             return DispatchResult(
-                success=True,
-                tool_key=tool_key,
-                result=result,
-                partial=False,
-                error_msg=None,
+                success=True, tool_key=tool_key,
+                result=result, partial=False, error_msg=None
             )
         except PartialResultError as e:
             self._registry.update_health(
                 server_name, HealthStatus.COLD, increment_fail=True
             )
             return DispatchResult(
-                success=False,
-                tool_key=tool_key,
-                result=e.partial_result,
-                partial=True,
-                error_msg=str(e),
+                success=False, tool_key=tool_key,
+                result=e.partial_result, partial=True, error_msg=str(e)
             )
         except Exception as e:
             self._registry.update_health(
@@ -83,36 +55,28 @@ class Dispatcher:
             )
             raise DispatchError(cause=e, tool_key=tool_key)
 
-    async def _load_schema(self, tool_entry: Any) -> Any:
-        """
-        Call tool_entry.loader(). Await if it's a coroutine function.
-        Store result in LRU under tool_entry.tool_key.
-        """
-        if inspect.iscoroutinefunction(tool_entry.loader):
-            result = await tool_entry.loader()
-        else:
-            result = tool_entry.loader()
-        self._lru.put(tool_entry.tool_key, result)
-        return result
+    def _ensure_warm(self, tool_key: str) -> None:
+        """Mark tool as warm in LRU. No loader call — warmth is connection state."""
+        self._lru.put(tool_key, True)
 
-    async def _invoke(self, tool_entry: Any, params: dict) -> Any:
-        """
-        Call the loader with params, wrapped in asyncio.wait_for
-        with STREAM_TIMEOUT_SECONDS timeout.
-        """
-        if inspect.iscoroutinefunction(tool_entry.loader):
-            coro = tool_entry.loader(params)
-        else:
-            # Sync loader — wrap in a coroutine
-            async def _sync_wrapper() -> Any:
-                return tool_entry.loader(params)
-            coro = _sync_wrapper()
-
+    async def _invoke(self, tool_entry, params: dict) -> Any:
+        """Single, authoritative call to the loader with real params."""
+        loader = tool_entry.loader
         try:
-            return await asyncio.wait_for(coro, timeout=STREAM_TIMEOUT_SECONDS)
+            if inspect.iscoroutinefunction(loader):
+                return await asyncio.wait_for(
+                    loader(params),
+                    timeout=STREAM_TIMEOUT_SECONDS
+                )
+            else:
+                # sync loader — run in executor so we don't block the event loop
+                loop = asyncio.get_running_loop()
+                return await asyncio.wait_for(
+                    loop.run_in_executor(None, lambda: loader(params)),
+                    timeout=STREAM_TIMEOUT_SECONDS
+                )
         except asyncio.TimeoutError:
             raise PartialResultError(
                 partial_result=None,
-                message=f"Timed out after {STREAM_TIMEOUT_SECONDS}s",
-                tool_key=tool_entry.tool_key,
+                message=f"{tool_entry.tool_key} timed out after {STREAM_TIMEOUT_SECONDS}s"
             )
