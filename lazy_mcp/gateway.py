@@ -42,6 +42,11 @@ class LazyMCP:
         )
         self._connections: dict[str, MCPConnection] = {}
 
+    def capabilities(self) -> list[str]:
+        """Delegates to self._registry.list_capabilities(). 
+        This is what gets shown to the LLM — never tool names or schemas."""
+        return self._registry.list_capabilities()
+
     def register(
         self,
         server_name: str,
@@ -49,6 +54,7 @@ class LazyMCP:
         description: str,
         loader: Callable,
         tags: list[str] = [],
+        capabilities: list[str] = [],
         pinned: bool = False,
     ) -> str:
         """
@@ -62,44 +68,51 @@ class LazyMCP:
             description=description,
             loader=loader,
             tags=tags,
+            capabilities=capabilities,
         )
         if pinned:
             self._dispatcher._lru.pin(tool_key)
         return tool_key
 
-    async def ask(self, intent: str, params: dict = {}) -> DispatchResult:
+    async def ask(
+        self,
+        capability: str,
+        task: str,
+        params: dict = {},
+    ) -> DispatchResult:
         """
-        Main entry point. Agent calls this with plain intent.
-        Agent never sees a schema.
-
-        Flow:
-        1. Get all tools from registry.
-        2. Match intent to tools.
-        3. Dispatch the best match.
+        1. tools = _registry.all_tools()
+        2. matches = _matcher.match(capability, task, tools)
+           On NoMatchError: return DispatchResult(success=False, tool_key="",
+             result=None, partial=False, 
+             error_msg=f"no tool for capability '{capability}'")
+        3. best = matches[0]
+        4. result = await _dispatcher.dispatch(best.tool_key, params)
+        5. return result
         """
         tools = self._registry.all_tools()
         try:
-            matches = self._matcher.match(intent, tools)
+            matches = self._matcher.match(capability, task, tools)
         except NoMatchError:
             return DispatchResult(
                 success=False,
                 tool_key="",
                 result=None,
                 partial=False,
-                error_msg="No tool available for this intent",
+                error_msg=f"no tool for capability '{capability}'",
             )
-        best = matches[0]  # highest confidence, already sorted
+        best = matches[0]
         result = await self._dispatcher.dispatch(best.tool_key, params)
         return result
 
-    def available(self, intent: str) -> list[MatchResult]:
+    def available(self, capability: str, task: str) -> list[MatchResult]:
         """
         Dry-run match — returns candidates without dispatching.
         Returns [] on NoMatchError (don't raise here).
         """
         tools = self._registry.all_tools()
         try:
-            return self._matcher.match(intent, tools)
+            return self._matcher.match(capability, task, tools)
         except NoMatchError:
             return []
 

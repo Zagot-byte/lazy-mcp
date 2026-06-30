@@ -1,4 +1,4 @@
-"""Tests for lazy_mcp.matcher — intent matching engine."""
+"""Tests for lazy_mcp.matcher — capability-based and BM25 intent matching engine."""
 
 import pytest
 from unittest.mock import MagicMock
@@ -18,6 +18,7 @@ def tools():
         tool_name="search",
         description="web search internet lookup find URLs current events browse",
         tags=["search", "web"],
+        capabilities=["web_search", "lookup"],
         loader=MagicMock(),
     )
     entry_file = ToolEntry(
@@ -26,6 +27,7 @@ def tools():
         tool_name="read_file",
         description="read file open local disk storage get file contents",
         tags=["file", "read", "local"],
+        capabilities=["file_access", "lookup"],
         loader=MagicMock(),
     )
     entry_email = ToolEntry(
@@ -34,6 +36,7 @@ def tools():
         tool_name="send",
         description="send email compose message mail recipient inbox",
         tags=["email", "send", "mail"],
+        capabilities=["email_compose"],
         loader=MagicMock(),
     )
     return [entry_search, entry_file, entry_email]
@@ -41,65 +44,70 @@ def tools():
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
-def test_exact_match(tools):
+def test_capability_filter_no_match(tools):
     matcher = Matcher()
-    results = matcher.match("search", tools)
-    assert results[0].tool_key == "brave::search"
+    # capability not registered
+    with pytest.raises(NoMatchError, match="no tool registered for capability 'database_query'"):
+        matcher.match("database_query", "find users", tools)
+
+
+def test_single_candidate_short_circuits(tools):
+    matcher = Matcher()
+    # "email_compose" only has one tool, gmail::send
+    results = matcher.match("email_compose", "anything here", tools)
+    assert len(results) == 1
+    assert results[0].tool_key == "gmail::send"
     assert results[0].match_type == MatchType.EXACT
     assert results[0].confidence == 1.0
 
 
-def test_keyword_match(tools):
+def test_multiple_candidates_ranked_by_bm25(tools):
     matcher = Matcher()
-    results = matcher.match("search the web", tools)
+    # "lookup" is on brave::search and filesystem::read_file
+    # task query mentions "web internet" -> should match brave::search better
+    results = matcher.match("lookup", "web search internet", tools)
     assert results[0].tool_key == "brave::search"
     assert results[0].match_type == MatchType.KEYWORD
-    assert results[0].confidence > 0.0
+    assert results[0].confidence == 1.0  # max score gets normalized to 1.0
 
-
-def test_returns_sorted_by_confidence(tools):
-    matcher = Matcher()
-    results = matcher.match("web search", tools)
-    confidences = [r.confidence for r in results]
-    assert confidences == sorted(confidences, reverse=True)
+    # task query mentions "local disk file" -> should match filesystem::read_file better
+    results2 = matcher.match("lookup", "local disk file contents", tools)
+    assert results2[0].tool_key == "filesystem::read_file"
+    assert results2[0].match_type == MatchType.KEYWORD
+    assert results2[0].confidence == 1.0
 
 
 def test_threshold_filters_low_confidence(tools):
     matcher = Matcher(threshold=0.9)
-    # "read" only partially matches file tool — should be filtered at 0.9
-    with pytest.raises(NoMatchError):
-        matcher.match("read", tools)
+    # Completely unrelated query -> scores are all 0 -> confidence 0 -> filtered by threshold
+    with pytest.raises(NoMatchError, match="no tool matched task within capability 'lookup'"):
+        matcher.match("lookup", "completely unrelated words", tools)
 
 
-def test_no_match_raises(tools):
+def test_empty_query_tokens_raises(tools):
     matcher = Matcher()
-    with pytest.raises(NoMatchError):
-        matcher.match("xkzqwerty gibberish", tools)
+    # task is empty
+    with pytest.raises(NoMatchError, match="task too vague to disambiguate"):
+        matcher.match("lookup", "", tools)
+    
+    # task is pure stopwords
+    with pytest.raises(NoMatchError, match="task too vague to disambiguate"):
+        matcher.match("lookup", "the and for in", tools)
 
 
 def test_semantic_hook_called_on_total_miss(tools):
     mock_hook = MagicMock(return_value=[])
-    matcher = Matcher(semantic_hook=mock_hook)
-    # semantic_hook returns [] which is falsy, but the hook returns directly
-    # so an empty list is returned (no NoMatchError from hook path)
-    # Actually per the code, if hook returns [], that's still empty results
-    # and the code returns hook output directly — so we get []
-    result = matcher.match("xkzqwerty gibberish", tools)
+    matcher = Matcher(threshold=0.9, semantic_hook=mock_hook)
+    
+    # query completely unrelated -> filters to empty list -> semantic hook is called
+    result = matcher.match("lookup", "completely unrelated words", tools)
     mock_hook.assert_called_once()
     assert result == []
 
 
-def test_semantic_hook_not_called_on_keyword_hit(tools):
+def test_semantic_hook_not_called_on_hit(tools):
     mock_hook = MagicMock()
     matcher = Matcher(semantic_hook=mock_hook)
-    matcher.match("search the web", tools)
+    
+    matcher.match("lookup", "web search", tools)
     mock_hook.assert_not_called()
-
-
-def test_dedup_keeps_highest_confidence(tools):
-    # a query that might match same tool via both exact and keyword
-    matcher = Matcher()
-    results = matcher.match("search", tools)
-    tool_keys = [r.tool_key for r in results]
-    # no duplicates
-    assert len(tool_keys) == len(set(tool_keys))

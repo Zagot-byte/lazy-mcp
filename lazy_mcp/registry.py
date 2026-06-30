@@ -26,6 +26,7 @@ class ToolRegistry:
         description: str,
         loader: Callable,
         tags: list[str] = [],
+        capabilities: list[str] = [],
     ) -> str:
         """
         Register a tool. Builds tool_key = "server_name::tool_name".
@@ -40,6 +41,7 @@ class ToolRegistry:
             description=description,
             loader=loader,
             tags=tags,
+            capabilities=capabilities,
         )
         if server_name not in self._health:
             self._health[server_name] = ServerHealth(
@@ -65,6 +67,19 @@ class ToolRegistry:
     def tools_for_server(self, server_name: str) -> list[ToolEntry]:
         """Return all tools whose server_name matches."""
         return [t for t in self._index.values() if t.server_name == server_name]
+
+    def list_capabilities(self) -> list[str]:
+        """
+        Return the sorted, deduplicated list of all capability labels 
+        across every registered tool. This is the vocabulary sent to the LLM —
+        cheap, flat, no schemas.
+        
+        Example output: ["code_execution", "file_access", "web_search"]
+        """
+        caps = set()
+        for tool in self._index.values():
+            caps.update(tool.capabilities)
+        return sorted(list(caps))
 
     def update_health(
         self,

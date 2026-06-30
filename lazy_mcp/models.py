@@ -38,6 +38,7 @@ class ToolEntry:
     tool_name: str
     description: str       # rich, keyword-dense, never shown to agent
     tags: list[str] = field(default_factory=list)  # additional match keywords
+    capabilities: list[str] = field(default_factory=list)  # closed-vocabulary labels, e.g. ["file_access"]
     loader: Callable = field(default=lambda: None)  # async or sync, returns dict of full schema
 
 

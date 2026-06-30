@@ -9,7 +9,10 @@ description = "Tool-dispatch middleware for LLM agents. Keeps tool schemas out o
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
-dependencies = ["aiohttp>=3.9.0"]
+dependencies = [
+  "aiohttp>=3.9.0",
+  "rank_bm25"
+]
 
 keywords = [
   "mcp", "llm", "agent", "tools", "middleware",

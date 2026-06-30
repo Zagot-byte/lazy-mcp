@@ -56,6 +56,7 @@ class LazyMCPServer:
         self._app: web.Application = web.Application()
         self._app.router.add_post("/tools/list", self._handle_list)
         self._app.router.add_post("/ask", self._handle_ask)
+        self._app.router.add_get("/capabilities", self._handle_capabilities)
         self._app.router.add_get("/health", self._handle_health)
 
         self._host: str = host
@@ -70,6 +71,7 @@ class LazyMCPServer:
         description: str,
         handler: Callable,
         tags: list[str] = [],
+        capabilities: list[str] = [],
         pinned: bool = False,
     ) -> str:
         """Register a tool under the implicit ``"local"`` server namespace.
@@ -84,6 +86,7 @@ class LazyMCPServer:
             description=description,
             loader=handler,
             tags=tags,
+            capabilities=capabilities,
         )
         if pinned:
             self._dispatcher._lru.pin(tool_key)
@@ -112,14 +115,23 @@ class LazyMCPServer:
         }
         return web.json_response(payload)
 
+    async def _handle_capabilities(self, request: web.Request) -> web.Response:
+        """
+        GET /capabilities
+        Returns: {"capabilities": self._registry.list_capabilities()}
+        This is the ONLY discovery endpoint a lazy-mcp-aware LLM needs to call.
+        """
+        return web.json_response({"capabilities": self._registry.list_capabilities()})
+
     async def _handle_ask(self, request: web.Request) -> web.Response:
-        """``POST /ask`` — intent-based dispatch (the core value).
+        """``POST /ask`` — capability-based dispatch (the core value).
 
         Expects a JSON body::
 
             {
-                "intent": "search the web for something",
-                "params": {"query": "lazy evaluation python"}
+                "capability": "file_access",
+                "task": "read the file /tmp/hello.txt",
+                "params": {"path": "/tmp/hello.txt"}
             }
 
         ``params`` is optional and defaults to ``{}``.
@@ -132,10 +144,15 @@ class LazyMCPServer:
                 {"error": "invalid JSON body"}, status=400,
             )
 
-        intent = body.get("intent")
-        if not intent or not isinstance(intent, str):
+        capability = body.get("capability")
+        task = body.get("task")
+        if not capability or not isinstance(capability, str):
             return web.json_response(
-                {"error": "missing field: intent"}, status=400,
+                {"error": "missing field: capability"}, status=400,
+            )
+        if not task or not isinstance(task, str):
+            return web.json_response(
+                {"error": "missing field: task"}, status=400,
             )
 
         params: dict[str, Any] = body.get("params", {})
@@ -143,12 +160,13 @@ class LazyMCPServer:
         # ── 2. Match ──────────────────────────────────────────────────────
         tools = self._registry.all_tools()
         try:
-            matches = self._matcher.match(intent, tools)
+            matches = self._matcher.match(capability, task, tools)
         except NoMatchError:
             return web.json_response({
                 "success": False,
                 "error": "no tool matched intent",
-                "intent": intent,
+                "capability": capability,
+                "task": task,
             })
 
         best = matches[0]  # highest confidence, already sorted

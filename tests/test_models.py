@@ -53,19 +53,22 @@ def test_tool_entry_defaults():
         description="desc",
     )
     assert entry.tags == []
+    assert entry.capabilities == []
     assert entry.loader is not None  # default lambda
 
 
-def test_tool_entry_with_tags():
+def test_tool_entry_with_tags_and_caps():
     entry = ToolEntry(
         tool_key="a::b",
         server_name="a",
         tool_name="b",
         description="d",
         tags=["x", "y"],
+        capabilities=["c1", "c2"],
         loader=lambda: "schema",
     )
     assert entry.tags == ["x", "y"]
+    assert entry.capabilities == ["c1", "c2"]
     assert entry.loader() == "schema"
 
 

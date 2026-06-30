@@ -121,11 +121,13 @@ async def discover(
         tags = list(
             tool.get("inputSchema", {}).get("properties", {}).keys()
         )
+        capabilities = tool.get("capabilities", [])
         registry.register(
             server_name=server_name,
             tool_name=tool["name"],
             description=tool["description"],
             loader=loader,
             tags=tags,
+            capabilities=capabilities,
         )
     return connection

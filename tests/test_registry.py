@@ -105,3 +105,21 @@ def test_tools_for_server():
     brave_tools = registry.tools_for_server("brave")
     assert len(brave_tools) == 2
     assert all(t.server_name == "brave" for t in brave_tools)
+
+
+def test_capabilities_registration_and_listing():
+    registry = ToolRegistry()
+    registry.register(
+        "brave", "search", "web search", MagicMock(),
+        capabilities=["web_search", "lookup"]
+    )
+    registry.register(
+        "filesystem", "read_file", "read file", MagicMock(),
+        capabilities=["file_access", "lookup"]
+    )
+    
+    assert registry.get("brave::search").capabilities == ["web_search", "lookup"]
+    assert registry.get("filesystem::read_file").capabilities == ["file_access", "lookup"]
+    
+    # deduplicated and sorted
+    assert registry.list_capabilities() == ["file_access", "lookup", "web_search"]

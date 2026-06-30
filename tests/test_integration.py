@@ -33,6 +33,7 @@ async def mock_mcp_server():
                             "inputSchema": {
                                 "properties": {"query": {"type": "string"}}
                             },
+                            "capabilities": ["web_search"],
                         },
                         {
                             "name": "summarize",
@@ -40,6 +41,7 @@ async def mock_mcp_server():
                             "inputSchema": {
                                 "properties": {"text": {"type": "string"}}
                             },
+                            "capabilities": ["summarize"],
                         },
                     ]
                 },
@@ -92,7 +94,7 @@ async def test_connect_auto_registers_tools(mock_mcp_server):
 async def test_ask_returns_result(mock_mcp_server):
     mcp = LazyMCP()
     await mcp.connect("testserver", mock_mcp_server)
-    result = await mcp.ask("search the web", {"query": "test"})
+    result = await mcp.ask("web_search", "search the web", {"query": "test"})
     assert result.success is True
     assert result.partial is False
     assert "search" in result.result[0]["text"]
@@ -102,7 +104,7 @@ async def test_ask_returns_result(mock_mcp_server):
 async def test_ask_no_match_returns_failure(mock_mcp_server):
     mcp = LazyMCP()
     await mcp.connect("testserver", mock_mcp_server)
-    result = await mcp.ask("xkzqwerty gibberish nonsense", {})
+    result = await mcp.ask("nonexistent_capability", "xkzqwerty gibberish nonsense", {})
     assert result.success is False
     assert result.tool_key == ""
     await mcp.disconnect_all()
@@ -111,8 +113,8 @@ async def test_ask_no_match_returns_failure(mock_mcp_server):
 async def test_lru_warms_on_second_call(mock_mcp_server):
     mcp = LazyMCP()
     await mcp.connect("testserver", mock_mcp_server)
-    await mcp.ask("search the web", {"query": "first"})
-    await mcp.ask("search the web", {"query": "second"})
+    await mcp.ask("web_search", "search the web", {"query": "first"})
+    await mcp.ask("web_search", "search the web", {"query": "second"})
     stats = mcp.health()["cache"]
     assert stats["hits"] >= 1
     await mcp.disconnect_all()
@@ -121,7 +123,7 @@ async def test_lru_warms_on_second_call(mock_mcp_server):
 async def test_server_marked_warm_after_success(mock_mcp_server):
     mcp = LazyMCP()
     await mcp.connect("testserver", mock_mcp_server)
-    await mcp.ask("search the web", {"query": "test"})
+    await mcp.ask("web_search", "search the web", {"query": "test"})
     health = mcp._registry.get_health("testserver")
     assert health.status == HealthStatus.WARM
     await mcp.disconnect_all()
@@ -130,7 +132,7 @@ async def test_server_marked_warm_after_success(mock_mcp_server):
 async def test_available_returns_candidates_without_dispatch(mock_mcp_server):
     mcp = LazyMCP()
     await mcp.connect("testserver", mock_mcp_server)
-    candidates = mcp.available("search the web")
+    candidates = mcp.available("web_search", "search the web")
     assert len(candidates) > 0
     assert candidates[0].tool_key == "testserver::search"
     # verify no dispatch happened — health should still be COLD
